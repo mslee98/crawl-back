@@ -20,7 +20,7 @@ export class SubscriptionKey {
   userId: string;
 
   @ManyToOne(() => User, (user) => user.subscriptionKeys, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'user_id' })
+  @JoinColumn({ name: 'user_id', referencedColumnName: 'uuid' })
   user: User;
 
   @Column({ type: 'varchar', length: 255, unique: true })
