@@ -12,16 +12,22 @@ import { SubscriptionKey } from './subscription-key.entity';
 @Entity('users')
 export class User {
   @PrimaryGeneratedColumn('uuid')
+  uuid: string;
+
+  /** 로그인 ID (예: lms980321). 필수, 유일 */
+  @Column({ type: 'varchar', length: 100, unique: true, nullable: false })
   id: string;
 
-  @Column({ type: 'varchar', length: 255, unique: true })
+  /** 이메일. 필수, 유일 */
+  @Column({ type: 'varchar', length: 255, unique: true, nullable: false })
   email: string;
 
-  @Column({ type: 'varchar', length: 255, name: 'password_hash' })
+  @Column({ type: 'varchar', length: 255, name: 'password_hash', nullable: false })
   passwordHash: string;
 
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  nickname: string | null;
+  /** 닉네임. 필수, 유일 */
+  @Column({ type: 'varchar', length: 100, unique: true, nullable: false })
+  nickname: string;
 
   @CreateDateColumn({ name: 'created_at', type: 'datetime' })
   createdAt: Date;

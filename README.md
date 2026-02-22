@@ -97,10 +97,12 @@ crsel-back/
 
 ### 3. 인증 (JWT)
 
+- **상세 명세 (요청/응답 필드, 예시)**: **[docs/auth-api.md](docs/auth-api.md)** 참고.
+
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| POST | `/auth/signup` | 회원가입 (email, password 8자 이상, nickname 선택) |
-| POST | `/auth/login` | 로그인 → accessToken, refreshToken, expiresIn, user 반환 |
+| POST | `/auth/signup` | 회원가입: **id**(로그인 ID), email, password 8자+, **nickname** 필수 |
+| POST | `/auth/login` | 로그인: **id**(로그인 ID) + password → accessToken, refreshToken, expiresIn, user |
 | POST | `/auth/refresh` | body: `{ refreshToken }` → 새 accessToken, expiresIn |
 | POST | `/auth/logout` | body: `{ refreshToken }` → 해당 refresh 토큰 무효화 |
 | GET | `/auth/me` | `Authorization: Bearer <accessToken>` 필요 → 현재 사용자 정보 |
@@ -167,6 +169,7 @@ npm run start:prod
 
 ## 설계 문서 (API / DB)
 
+- **[인증 API 명세 (로그인·회원가입)](docs/auth-api.md)** — 요청/응답 필드, 예시, 에러 정리
 - **[인증 REST API 설계](docs/auth-api-design.md)** — 로그인/로그아웃, Access·Refresh 토큰 전략
 - **[DB 스키마 러프 설계](docs/db-schema-rough.md)** — `users`, `refresh_tokens` 테이블
 - **[스키마 SQL](docs/schema-auth.sql)** — PostgreSQL 인증 테이블 생성 스크립트

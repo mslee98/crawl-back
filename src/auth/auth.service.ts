@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   UnauthorizedException,
@@ -14,15 +15,23 @@ import { LoginDto } from './dto/login.dto';
 import { SignupDto } from './dto/signup.dto';
 import { TokenPayload } from './auth.types';
 
+/** 로그인 성공 시 응답 타입 (Access/Refresh 토큰 + 사용자 정보) */
 export interface LoginResult {
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
-  user: { id: string; email: string; nickname: string | null };
+  user: { uuid: string; id: string; email: string; nickname: string };
 }
 
+/**
+ * 인증 비즈니스 로직
+ * - 회원가입(id/email/nickname 중복 체크, 비밀번호 해시)
+ * - 로그인(검증 후 JWT + Refresh 토큰 발급)
+ * - 토큰 갱신, 로그아웃, 프로필 조회
+ */
 @Injectable()
 export class AuthService {
+  /** Access 토큰 유효 시간(초). 기본 900(15분) */
   private readonly accessExpiresInSec: number;
 
   constructor(
@@ -38,36 +47,63 @@ export class AuthService {
     );
   }
 
-  async signup(dto: SignupDto): Promise<{ id: string; email: string; nickname: string | null }> {
-    const existing = await this.userRepository.findOne({ where: { email: dto.email } });
-    if (existing) {
-      throw new ConflictException('이미 사용 중인 이메일입니다.');
-    }
+  /**
+   * 회원가입
+   * - id, email, nickname 중복 시 ConflictException(409)
+   * - nickname은 nickname ?? username 중 비어 있지 않은 값 사용
+   * @returns 가입된 사용자 정보 (uuid, id, email, nickname). 비밀번호 제외
+   */
+  async signup(dto: SignupDto): Promise<{ uuid: string; id: string; email: string; nickname: string }> {
+    const nicknameValue = (dto.nickname ?? dto.username ?? '').trim();
+    if (!nicknameValue) throw new BadRequestException('닉네임을 입력해 주세요.');
+
+    const [existingEmail, existingId, existingNickname] = await Promise.all([
+      this.userRepository.findOne({ where: { email: dto.email } }),
+      this.userRepository.findOne({ where: { id: dto.id } }),
+      this.userRepository.findOne({ where: { nickname: nicknameValue } }),
+    ]);
+    if (existingEmail) throw new ConflictException('이미 사용 중인 이메일입니다.');
+    if (existingId) throw new ConflictException('이미 사용 중인 ID입니다.');
+    if (existingNickname) throw new ConflictException('이미 사용 중인 닉네임입니다.');
+
+    const nickname = nicknameValue;
     const passwordHash = await bcrypt.hash(dto.password, 10);
     const result = await this.userRepository.insert({
+      id: dto.id,
       email: dto.email,
       passwordHash,
-      nickname: dto.nickname ?? null,
+      nickname,
     });
-    const id = result.identifiers[0]?.id as string;
-    const user = await this.userRepository.findOneOrFail({ where: { id } });
-    return { id: user.id, email: user.email, nickname: user.nickname };
+    const uuid = result.identifiers[0]?.uuid as string;
+    const user = await this.userRepository.findOneOrFail({ where: { uuid } });
+    return { uuid: user.uuid, id: user.id, email: user.email, nickname: user.nickname };
   }
 
-  async validateUser(email: string, password: string): Promise<User | null> {
-    const user = await this.userRepository.findOne({ where: { email } });
+  /**
+   * 로그인 ID + 비밀번호 검증
+   * - id는 users.id(로그인 ID)로 조회, 이메일 아님
+   * @returns 검증 성공 시 User 엔티티, 실패 시 null
+   */
+  async validateUser(id: string, password: string): Promise<User | null> {
+    const user = await this.userRepository.findOne({ where: { id } });
     if (!user) return null;
     const ok = await bcrypt.compare(password, user.passwordHash);
     return ok ? user : null;
   }
 
+  /**
+   * 로그인 처리
+   * - validateUser로 검증 후 Access(JWT) + Refresh(UUID) 토큰 발급
+   * - Refresh 토큰은 DB에 저장 (만료 7일)
+   * @throws UnauthorizedException ID/비밀번호 불일치
+   */
   async login(dto: LoginDto): Promise<LoginResult> {
-    const user = await this.validateUser(dto.email, dto.password);
+    const user = await this.validateUser(dto.id, dto.password);
     if (!user) {
-      throw new UnauthorizedException('이메일 또는 비밀번호가 올바르지 않습니다.');
+      throw new UnauthorizedException('ID 또는 비밀번호가 올바르지 않습니다.');
     }
 
-    const payload: TokenPayload = { sub: user.id, email: user.email };
+    const payload: TokenPayload = { sub: user.uuid, email: user.email };
     const accessToken = this.jwtService.sign(payload, {
       expiresIn: this.accessExpiresInSec,
     });
@@ -76,7 +112,7 @@ export class AuthService {
     refreshExpiresAt.setDate(refreshExpiresAt.getDate() + 7);
 
     await this.refreshTokenRepository.insert({
-      userId: user.id,
+      userId: user.uuid,
       token: refreshToken,
       expiresAt: refreshExpiresAt,
     });
@@ -86,6 +122,7 @@ export class AuthService {
       refreshToken,
       expiresIn: this.accessExpiresInSec,
       user: {
+        uuid: user.uuid,
         id: user.id,
         email: user.email,
         nickname: user.nickname,
@@ -93,6 +130,11 @@ export class AuthService {
     };
   }
 
+  /**
+   * Refresh 토큰으로 새 Access 토큰 발급
+   * - DB에서 refreshToken 조회, revoked 아니고 만료 전이면 새 JWT 발급
+   * @throws UnauthorizedException 토큰 없음/만료/이미 무효화
+   */
   async refresh(refreshToken: string): Promise<{ accessToken: string; expiresIn: number }> {
     const row = await this.refreshTokenRepository.findOne({
       where: { token: refreshToken, revokedAt: IsNull() },
@@ -102,7 +144,7 @@ export class AuthService {
       throw new UnauthorizedException('유효하지 않거나 만료된 refresh token입니다.');
     }
 
-    const payload: TokenPayload = { sub: row.user.id, email: row.user.email };
+    const payload: TokenPayload = { sub: row.user.uuid, email: row.user.email };
     const accessToken = this.jwtService.sign(payload, {
       expiresIn: this.accessExpiresInSec,
     });
@@ -112,6 +154,10 @@ export class AuthService {
     };
   }
 
+  /**
+   * 로그아웃 (Refresh 토큰 무효화)
+   * - 해당 토큰에 revoked_at 설정. 이미 무효화된 경우는 무시
+   */
   async logout(refreshToken: string): Promise<void> {
     const row = await this.refreshTokenRepository.findOne({
       where: { token: refreshToken },
@@ -122,10 +168,15 @@ export class AuthService {
     }
   }
 
-  async getProfile(userId: string): Promise<{ id: string; email: string; nickname: string | null } | null> {
+  /**
+   * uuid(사용자 PK)로 프로필 조회
+   * - JWT payload의 sub가 user.uuid이므로, /auth/me 등에서 이 메서드 사용
+   * @returns uuid, id, email, nickname. 없으면 null
+   */
+  async getProfile(userUuid: string): Promise<{ uuid: string; id: string; email: string; nickname: string } | null> {
     const user = await this.userRepository.findOne({
-      where: { id: userId },
-      select: ['id', 'email', 'nickname'],
+      where: { uuid: userUuid },
+      select: ['uuid', 'id', 'email', 'nickname'],
     });
     return user ?? null;
   }
