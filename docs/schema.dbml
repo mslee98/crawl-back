@@ -1,0 +1,45 @@
+// Use DBML to define your database structure
+// Docs: https://dbml.dbdiagram.io/docs
+// ERD: https://dbdiagram.io 에서 불러오기
+
+Table users {
+  uuid varchar(36) [primary key, note: '서버 내부 식별자']
+  id varchar(100) [unique, not null, note: '로그인 ID (예: lms980321)']
+  email varchar(255) [unique, not null]
+  password_hash varchar(255) [not null]
+  nickname varchar(100) [unique, not null]
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+}
+
+Table refresh_tokens {
+  id varchar(36) [primary key]
+  user_id varchar(36) [not null, note: 'FK → users.uuid']
+  token varchar(255) [unique, not null]
+  expires_at timestamp [not null]
+  created_at timestamp [not null]
+  revoked_at timestamp [note: '로그아웃 시 설정']
+}
+
+Table subscription_plans {
+  id varchar(36) [primary key]
+  name varchar(100) [not null, note: '월간/연간 등']
+  duration_days integer [not null]
+  price decimal(10,2) [default: 0]
+  created_at timestamp [not null]
+}
+
+Table subscription_keys {
+  id varchar(36) [primary key]
+  user_id varchar(36) [not null, note: 'FK → users.uuid']
+  plan_id varchar(36) [note: 'FK → subscription_plans.id, 선택']
+  key varchar(255) [unique, not null]
+  valid_from timestamp [not null]
+  valid_until timestamp [not null]
+  status varchar(20) [note: 'active | expired | revoked']
+  created_at timestamp [not null]
+}
+
+Ref: refresh_tokens.user_id > users.uuid
+Ref: subscription_keys.user_id > users.uuid
+Ref: subscription_keys.plan_id > subscription_plans.id
